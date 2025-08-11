@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Máquina Inteligente de Reciclaje — Prototipo</title>
+  <style>
+    :root{
+      --bg:#f6fbf5; /* suave */
+      --card:#ffffff;
+      --accent:#2e8b57; /* verde */
+      --muted:#6b6b6b;
+      --blue:#2b7bd3;
+      --glass: rgba(255,255,255,0.6);
+    }
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background:var(--bg); color:#111}
+    .app{max-width:900px;margin:18px auto;padding:18px}
+    header{display:flex;gap:12px;align-items:center}
+    .logo{width:56px;height:56px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--blue));display:flex;align-items:center;justify-content:center;color:white;font-weight:700}
+    h1{font-size:18px;margin:0}
+    p.lead{margin:4px 0 12px;color:var(--muted)}
+
+    .grid{display:grid;grid-template-columns:1fr 360px;gap:14px}
+    .card{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(20,20,20,0.06)}
+
+    /* Cámara */
+    .camera{position:relative;height:360px;border-radius:8px;overflow:hidden;background:#000}
+    video{width:100%;height:100%;object-fit:cover}
+    .overlay{position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,0.45);color:white;padding:6px 10px;border-radius:8px;font-weight:600}
+
+    /* resultado */
+    .result{padding:12px;border-radius:8px;margin-top:10px;text-align:center}
+    .result .label{font-size:20px;font-weight:700}
+    .result .hint{color:var(--muted);font-size:13px;margin-top:6px}
+
+    /* puntaje */
+    .scores{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .score{flex:1 1 100%;display:flex;align-items:center;justify-content:space-between;padding:10px;border-radius:10px;background:linear-gradient(90deg,rgba(0,0,0,0.03),transparent)}
+    .score .who{font-weight:700}
+    .controls{display:flex;gap:8px;margin-top:10px}
+
+    button{background:var(--accent);color:white;border:0;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+    button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+
+    footer{margin-top:12px;color:var(--muted);font-size:13px;text-align:center}
+    @media(max-width:860px){.grid{grid-template-columns:1fr;}.camera{height:280px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="logo">IP</div>
+      <div>
+        <h1>Máquina Inteligente de Reciclaje — Prototipo</h1>
+        <p class="lead">Contexto: Instituto Politécnico de Santa Cruz — 1º Medio (Tecnología). Interfaz para demostración con modelo de Teachable Machine.</p>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="camera" id="cameraWrap">
+          <video id="webcam" autoplay playsinline muted></video>
+          <div class="overlay" id="overlayText">Cargando cámara...</div>
+        </div>
+
+        <div class="result card" id="resultCard">
+          <div class="label" id="detected">Esperando objeto...</div>
+          <div class="hint" id="instruction">Acerca un residuo frente a la cámara para identificarlo.</div>
+
+          <div class="controls">
+            <button id="confirmBtn">Confirmar y sumar punto</button>
+            <button class="secondary" id="resetBtn">Reiniciar puntos</button>
+          </div>
+
+          <div class="scores" id="scores">
+            <!-- puntajes por curso -->
+          </div>
+        </div>
+
+      </div>
+
+      <div class="card">
+        <h3>Información</h3>
+        <p style="margin:6px 0;color:var(--muted)">Clases actuales (ejemplo):</p>
+        <ul id="classesList" style="padding-left:18px;margin:6px 0 12px">
+          <!-- lista dinámica -->
+        </ul>
+
+        <h4>Estado</h4>
+        <p id="modelStatus" style="color:var(--muted);margin:6px 0">Modelo: no cargado</p>
+
+        <p style="margin-top:12px;color:var(--muted);font-size:13px">Instrucciones rápidas:</p>
+        <ol style="font-size:13px;color:var(--muted);">
+          <li>Entrena un modelo en <strong>Teachable Machine</strong> y exporta como TensorFlow.js.</li>
+          <li>Sustituye la variable <code>MODEL_URL</code> en el script por la ruta a tu modelo.</li>
+          <li>Levanta la página en un servidor local (por ejemplo: <code>python -m http.server</code>).</li>
+        </ol>
+      </div>
+    </div>
+
+    <footer>
+      Prototipo didáctico — adaptar, probar y mejorar en el taller del Instituto.
+    </footer>
+  </div>
+
+  <script>
+    // ------------------ CONFIG ------------------
+    // Reemplaza esta URL por la carpeta donde exportaste el modelo de Teachable Machine (TensorFlow.js)
+    // Ejemplo: const MODEL_URL = './model/'; donde dentro hay model.json y weights.bin
+    const MODEL_URL = './model/'; // <-- CAMBIAR A TU RUTA
+
+    // Mapeo de clases (nombres de las clases que tengas en el modelo) a contenedores y colores
+    // Ajusta los nombres EXACTOS según el modelo entrenado
+    const CLASS_MAP = {
+      'Plastico': {label:'PLÁSTICO', color:'#2b7bd3', container:'Contenedor AZUL'},
+      'Papel': {label:'PAPEL', color:'#4caf50', container:'Contenedor VERDE'},
+      'Lata': {label:'LATA', color:'#f4c542', container:'Contenedor AMARILLO'}
+    };
+
+    // Cursos / equipos para puntaje (se guardan en localStorage)
+    const TEAMS = ['1°A','1°B','1°C'];
+
+    // ------------------ UI refs ------------------
+    const video = document.getElementById('webcam');
+    const overlay = document.getElementById('overlayText');
+    const detected = document.getElementById('detected');
+    const instruction = document.getElementById('instruction');
+    const classesList = document.getElementById('classesList');
+    const modelStatus = document.getElementById('modelStatus');
+    const scoresWrap = document.getElementById('scores');
+    const confirmBtn = document.getElementById('confirmBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    let model, webcamStream, maxPredictions;
+    let lastPrediction = null;
+    let scores = {};
+
+    // init UI
+    function initUI(){
+      classesList.innerHTML='';
+      for(const k in CLASS_MAP){
+        const li = document.createElement('li');
+        li.textContent = `${CLASS_MAP[k].label} → ${CLASS_MAP[k].container}`;
+        classesList.appendChild(li);
+      }
+
+      // scores
+      const saved = localStorage.getItem('ip_sc_scores');
+      if(saved){ scores = JSON.parse(saved); }
+      else{ TEAMS.forEach(t=>scores[t]=0); localStorage.setItem('ip_sc_scores', JSON.stringify(scores)); }
+      renderScores();
+    }
+
+    function renderScores(){
+      scoresWrap.innerHTML='';
+      for(const t of Object.keys(scores)){
+        const el = document.createElement('div'); el.className='score';
+        el.innerHTML = `<div class="who">${t}</div><div class="pts">${scores[t]} pts</div>`;
+        scoresWrap.appendChild(el);
+      }
+    }
+
+    resetBtn.addEventListener('click', ()=>{
+      if(confirm('Reiniciar puntos de todos los cursos?')){
+        TEAMS.forEach(t=>scores[t]=0); localStorage.setItem('ip_sc_scores', JSON.stringify(scores)); renderScores();
+      }
+    });
+
+    confirmBtn.addEventListener('click', ()=>{
+      if(!lastPrediction){ alert('No hay predicción para confirmar.'); return; }
+      // por simplicidad sumar punto al primer equipo (modificar en implementación real)
+      const team = TEAMS[0];
+      scores[team] = (scores[team]||0) + 1;
+      localStorage.setItem('ip_sc_scores', JSON.stringify(scores)); renderScores();
+      alert(`Punto agregado a ${team}`);
+    });
+
+    // ------------------ Webcam ------------------
+    async function initWebcam(){
+      try{
+        webcamStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+        video.srcObject = webcamStream;
+        await video.play();
+        overlay.textContent = 'Cámara lista — acercar objeto';
+      }catch(e){ overlay.textContent = 'No se pudo acceder a la cámara.'; console.error(e); }
+    }
+
+    // ------------------ Teachable Machine model load ------------------
+    // Carga el modelo exportado desde Teachable Machine (TensorFlow.js)
+    async function loadModel(){
+      modelStatus.textContent = 'Cargando modelo...';
+      try{
+        // carga de tfjs y modelo
+        await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs');
+        await loadScript('https://cdn.jsdelivr.net/npm/@teachablemachine/image');
+
+        const url = MODEL_URL;
+        const tmModel = await tmImage.load(url + 'model.json', url + 'metadata.json');
+        model = tmModel; maxPredictions = model.getTotalClasses();
+        modelStatus.textContent = 'Modelo cargado';
+        runPredictionLoop();
+      }catch(e){ modelStatus.textContent = 'Error cargando modelo'; console.error(e); }
+    }
+
+    function loadScript(src){
+      return new Promise((res,rej)=>{
+        const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s);
+      });
+    }
+
+    // ------------------ Prediction loop ------------------
+    async function runPredictionLoop(){
+      if(!model) return;
+      while(true){
+        const prediction = await model.predict(video);
+        // tomar la clase con mayor probabilidad
+        let best = null; let bestP=0;
+        for(const p of prediction){ if(p.probability>bestP){ bestP=p.probability; best=p; }}
+        if(best && best.probability>0.65){
+          // usar nombre de clase tal cual
+          lastPrediction = best.className;
+          updateUIForClass(best.className, best.probability);
+        } else {
+          lastPrediction = null;
+          detected.textContent = 'No detectado';
+          instruction.textContent = 'Acerca un residuo al encuadre.';
+        }
+        await sleep(600);
+      }
+    }
+
+    function updateUIForClass(name, prob){
+      const map = CLASS_MAP[name] || null;
+      if(map){
+        detected.textContent = `${map.label} (${Math.round(prob*100)}%)`;
+        instruction.textContent = `Deposítalo en: ${map.container}`;
+        overlay.style.background = map.color;
+        overlay.textContent = map.label;
+      } else {
+        detected.textContent = `${name} (${Math.round(prob*100)}%)`;
+        instruction.textContent = 'Ver contenedores disponibles.';
+        overlay.style.background = 'rgba(0,0,0,0.45)';
+      }
+    }
+
+    function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+    // ------------------ start ------------------
+    (async ()=>{
+      initUI();
+      await initWebcam();
+      await loadModel();
+    })();
+
+  </script>
+</body>
+</html>
